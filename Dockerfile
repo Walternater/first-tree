@@ -38,7 +38,12 @@ COPY --from=build /app/packages/command/dist packages/command/dist/
 COPY --from=build /app/packages/server/drizzle packages/server/drizzle/
 COPY --from=build /app/packages/web/dist packages/web/dist/
 
+RUN apk add --no-cache wget
+
 ENV NODE_ENV=production
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8000/healthz || exit 1
 
 CMD ["node", "packages/command/dist/cli/index.mjs", "server", "start", "--no-interactive"]
