@@ -115,7 +115,7 @@ first-tree-hub client start
 
 ## Validation
 
-- For skill-only documentation work, run the skill validator and inspect `agents/openai.yaml`.
+- For skill-only documentation work, run `pnpm validate:skill` from the repo root and inspect `agents/openai.yaml`.
 - For CLI or behavior changes, prefer:
 
 ```bash
