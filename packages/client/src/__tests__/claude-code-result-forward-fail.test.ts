@@ -116,5 +116,18 @@ describe("claude-code handler — sendMessage failure surfaces lost result", () 
     // snapshot is truncated to keep total message ≤ 2000 chars
     expect(err.payload.message.length).toBeLessThanOrEqual(2000);
     expect(err.payload.message).toContain("final answer");
+
+    // A failed-forward still has to close the turn so the frontend's
+    // turn-grouping filter hides the preceding transient events. Emit order:
+    // error first, then turn_end:error — the chat UI keeps the error visible
+    // while collapsing the rest of the turn's activity.
+    const turnEnds = emitted.filter((e) => e.kind === "turn_end");
+    expect(turnEnds).toHaveLength(1);
+    const te = turnEnds[0];
+    if (!te || te.kind !== "turn_end") throw new Error("expected turn_end event");
+    expect(te.payload.status).toBe("error");
+    const errIdx = emitted.findIndex((e) => e.kind === "error");
+    const turnEndIdx = emitted.findIndex((e) => e.kind === "turn_end");
+    expect(errIdx).toBeLessThan(turnEndIdx);
   });
 });
