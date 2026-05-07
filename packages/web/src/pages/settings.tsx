@@ -1,53 +1,60 @@
-import { useLocation, useNavigate } from "react-router";
-import { PageHeader } from "../components/ui/page-header.js";
-import { Tab, TabBar } from "../components/ui/tab-bar.js";
-import { BindingsPage } from "./bindings.js";
-import { MembershipPanel } from "./membership-panel.js";
-
-const tabs = [
-  { key: "bindings", label: "Bindings" },
-  { key: "membership", label: "Membership" },
-] as const;
-
-type TabKey = (typeof tabs)[number]["key"];
+import { NavLink, Outlet } from "react-router";
+import { cn } from "../lib/utils.js";
 
 /**
- * User-facing Settings page. Post hub-ui-polish split: every signed-in member
- * sees `/settings` (Bindings is scoped per-role by the server). Admin-only
- * organization controls (Members, org system config) moved to `/admin`.
- *
- * Membership tab hosts the self-service "leave team" flow — visible to
- * every role per proposal §决策 #20.
- *
- * Computer-level info (registered machines + their runtime-provider capability
- * matrix) lives on `/clients`, not here, so the operator answers "which
- * machines can run what" in one place.
+ * Settings is a master-detail container. Same flat aesthetic as TeamLayout
+ * — no borders, no contrasting sidebar bg; active state is a soft pill.
  */
-export function SettingsPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  const hashTab = location.hash.replace("#", "") as TabKey;
-  const active: TabKey = tabs.some((t) => t.key === hashTab) ? hashTab : "bindings";
-
-  const switchTab = (key: TabKey) => {
-    navigate({ hash: key }, { replace: true });
-  };
-
+export function SettingsLayout() {
   return (
-    <div className="-m-6">
-      <PageHeader title="Settings" subtitle="Per-member controls" />
-      <TabBar>
-        {tabs.map((tab) => (
-          <Tab key={tab.key} active={active === tab.key} onClick={() => switchTab(tab.key)}>
-            {tab.label}
-          </Tab>
-        ))}
-      </TabBar>
-      <div style={{ padding: "var(--sp-4) var(--sp-5) var(--sp-7)" }}>
-        {active === "bindings" && <BindingsPage />}
-        {active === "membership" && <MembershipPanel />}
+    <div className="-m-6 flex" style={{ minHeight: "calc(100vh - var(--sp-10))" }}>
+      <aside
+        className="shrink-0 overflow-auto"
+        style={{
+          width: 200,
+          padding: "var(--sp-4) var(--sp-2)",
+        }}
+      >
+        <SubNavLink to="/settings/computers" label="Computers" />
+        <SubNavLink to="/settings/integrations" label="Integrations" />
+      </aside>
+
+      <div className="flex-1 min-w-0 overflow-auto">
+        <Outlet />
       </div>
     </div>
+  );
+}
+
+function SubNavLink({ to, label }: { to: string; label: string }) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        cn(
+          "block w-full text-left bg-transparent text-body transition-colors",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          !isActive && "hover:bg-accent",
+        )
+      }
+      style={{
+        borderRadius: "var(--radius-input)",
+      }}
+    >
+      {({ isActive }) => (
+        <span
+          className="flex items-center"
+          style={{
+            padding: "var(--sp-1_25) var(--sp-2_5)",
+            background: isActive ? "var(--bg-active)" : "transparent",
+            color: isActive ? "var(--fg)" : "var(--fg-3)",
+            fontWeight: isActive ? 500 : 400,
+            borderRadius: "var(--radius-input)",
+          }}
+        >
+          <span className="flex-1 truncate">{label}</span>
+        </span>
+      )}
+    </NavLink>
   );
 }
