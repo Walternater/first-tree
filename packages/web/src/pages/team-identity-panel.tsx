@@ -27,25 +27,19 @@ export function TeamIdentityPanel() {
   });
 
   const [displayName, setDisplayName] = useState("");
-  const [slug, setSlug] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (!orgQuery.data) return;
     setDisplayName(orgQuery.data.displayName);
-    setSlug(orgQuery.data.name);
   }, [orgQuery.data]);
 
   const mutation = useMutation({
     mutationFn: () => {
       if (!organizationId || !orgQuery.data) throw new Error("organization not loaded");
-      const patch: { name?: string; displayName?: string } = {};
       const trimmedDisplay = displayName.trim();
-      const trimmedSlug = slug.trim();
-      if (trimmedDisplay && trimmedDisplay !== orgQuery.data.displayName) patch.displayName = trimmedDisplay;
-      if (trimmedSlug && trimmedSlug !== orgQuery.data.name) patch.name = trimmedSlug;
-      if (Object.keys(patch).length === 0) return Promise.resolve(orgQuery.data);
-      return updateOrganization(organizationId, patch);
+      if (!trimmedDisplay || trimmedDisplay === orgQuery.data.displayName) return Promise.resolve(orgQuery.data);
+      return updateOrganization(organizationId, { displayName: trimmedDisplay });
     },
     onSuccess: (next: Organization) => {
       queryClient.setQueryData(["organization", organizationId], next);
@@ -103,14 +97,6 @@ export function TeamIdentityPanel() {
             value={displayName}
             onChange={setDisplayName}
           />
-          <Field
-            label="URL slug"
-            hint="Lowercase letters, digits, hyphens. Used in invite URLs."
-            value={slug}
-            onChange={(v) => setSlug(v.toLowerCase())}
-            mono
-            pattern="[a-z0-9][a-z0-9-]*"
-          />
           {mutation.error instanceof Error && (
             <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
               {mutation.error.message}
@@ -141,7 +127,7 @@ function Field({
     <div
       className="grid items-start gap-5"
       style={{
-        gridTemplateColumns: "1fr var(--sp-45)",
+        gridTemplateColumns: "var(--sp-45) 1fr",
         padding: "var(--sp-3_5) var(--sp-1)",
         borderTop: "var(--hairline) solid var(--border-faint)",
       }}
