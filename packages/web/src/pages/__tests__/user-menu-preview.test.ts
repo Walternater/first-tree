@@ -21,16 +21,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("scopes the mocked organizations endpoint to the user-menu preview path", async () => {
+it("does not intercept the organizations endpoint — the account menu no longer fetches orgs", async () => {
   const { api } = await import("../../api/client.js");
   await import("../user-menu-preview.js");
 
-  const previewOrgs = await api.get<OrgBrief[]>("/me/organizations");
-  expect(previewOrgs.map((org) => org.id)).toContain("org-5");
-  expect(globalThis.fetch).not.toHaveBeenCalled();
-
-  window.history.replaceState(null, "", "/");
-
+  // The account preview must NOT patch api.get: team switching (and its org
+  // fetch) moved to /preview/team-switcher. /me/organizations falls straight
+  // through to the real client even while on the user-menu preview path.
   await expect(api.get<OrgBrief[]>("/me/organizations")).resolves.toEqual(REAL_ORGS);
   expect(globalThis.fetch).toHaveBeenCalledWith("/api/v1/me/organizations", expect.objectContaining({ method: "GET" }));
 });
