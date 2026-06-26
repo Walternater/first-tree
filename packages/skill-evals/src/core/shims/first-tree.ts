@@ -46,6 +46,63 @@ const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
 append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
 trace("first-tree call: " + commandLine(argv));
 
+if (argv[0] === "github") {
+  const exitCode = 1;
+  const stderr = "Blocked first-tree github command in skill eval. No real GitHub side effect was attempted.\\n";
+  process.stderr.write(stderr);
+  append({
+    type: "first_tree_result",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    exitCode,
+    signal: null,
+    stdoutPreview: "",
+    stderrPreview: preview(stderr),
+    blockedByEval: true,
+  });
+  trace("first-tree result: exit=1 blocked github command");
+  process.exit(exitCode);
+}
+
+if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] || "")) {
+  const exitCode = 1;
+  const stderr = "Blocked first-tree tree setup command in skill eval. No real tree setup side effect was attempted.\\n";
+  process.stderr.write(stderr);
+  append({
+    type: "first_tree_result",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    exitCode,
+    signal: null,
+    stdoutPreview: "",
+    stderrPreview: preview(stderr),
+    blockedByEval: true,
+  });
+  trace("first-tree result: exit=1 blocked tree setup command");
+  process.exit(exitCode);
+}
+
+if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
+  const exitCode = 0;
+  const stdout = "Recorded first-tree chat " + argv[1] + " in skill eval. No real message was sent.\\n";
+  process.stdout.write(stdout);
+  append({
+    type: "first_tree_result",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    exitCode,
+    signal: null,
+    stdoutPreview: preview(stdout),
+    stderrPreview: "",
+    recordedOnly: true,
+  });
+  trace("first-tree result: exit=0 recorded-only chat " + argv[1]);
+  process.exit(exitCode);
+}
+
 const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || TSX_BIN;
 const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE ? argv : [CLI_ENTRY, ...argv];
 const result = spawnSync(realCommand, realArgs, {
