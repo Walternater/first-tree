@@ -6,7 +6,7 @@ import {
   runtimeProviderInstallCommand,
   runtimeProviderLoginCommand,
 } from "@first-tree/shared";
-import { prerelease, satisfies, valid } from "semver";
+import { major, prerelease, satisfies, valid } from "semver";
 import {
   automaticCandidateAllowed,
   getLoginShellPathDirs,
@@ -15,7 +15,8 @@ import {
 
 /** Lowest compatible CLI — shared with catalog npm package metadata. */
 export { OPENCODE_MINIMUM_VERSION };
-export const OPENCODE_SUPPORTED_VERSION_RANGE = `>=${OPENCODE_MINIMUM_VERSION} <2.0.0`;
+/** Supported range spans 1.18.7 through the entire 2.x line (excludes 3.0.0+). */
+export const OPENCODE_SUPPORTED_VERSION_RANGE = `>=${OPENCODE_MINIMUM_VERSION} <3.0.0`;
 /** Host-local OpenCode installation surfaced in setup and error copy. */
 export const OPENCODE_INSTALL_COMMAND = runtimeProviderInstallCommand("opencode");
 export const OPENCODE_LOGIN_COMMAND = runtimeProviderLoginCommand("opencode");
@@ -127,8 +128,11 @@ function openCodeExecutableCandidates(base: string, platform: NodeJS.Platform): 
 export function parseOpenCodeVersionOutput(output: string): string | null {
   for (const token of whitespaceTokens(output)) {
     if (token.length > 64) continue;
-    const normalized = valid(token);
-    if (!normalized || normalized !== token || prerelease(normalized) !== null) continue;
+    // OpenCode prints `v2.0.26` (leading `v`); semver's `valid` rejects that,
+    // so strip a single leading `v` before validation.
+    const candidate = token.startsWith("v") && token.length > 1 ? token.slice(1) : token;
+    const normalized = valid(candidate);
+    if (!normalized || normalized !== candidate || prerelease(normalized) !== null) continue;
     return normalized;
   }
   return null;
@@ -137,6 +141,17 @@ export function parseOpenCodeVersionOutput(output: string): string | null {
 export function isSupportedOpenCodeVersion(version: string | null): boolean {
   if (!version || valid(version) !== version || prerelease(version) !== null) return false;
   return satisfies(version, OPENCODE_SUPPORTED_VERSION_RANGE, { includePrerelease: false });
+}
+
+/**
+ * OpenCode 2.x is a separate runtime generation: it dropped the `db` command,
+ * changed `run` to a background-service/`--standalone` model, and moved the
+ * prompt to a positional argument. The handler branches on this to avoid the V1
+ * `db` readiness gate and V1-only `run` flags.
+ */
+export function isOpenCodeV2(version: string | null): boolean {
+  if (!version || valid(version) !== version || prerelease(version) !== null) return false;
+  return major(version) >= 2;
 }
 
 function whitespaceTokens(value: string): string[] {

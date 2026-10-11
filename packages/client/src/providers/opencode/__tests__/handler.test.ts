@@ -159,12 +159,10 @@ if (kind === "version") {
 } else {
   let input = "";
   process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    input += chunk;
-  });
+  process.stdin.on("data", (chunk) => { input += chunk; });
   process.stdin.on("end", () => {
+    const sid = process.env.FIRST_TREE_TEST_PROVIDER_SESSION_ID ?? "ses_new";
     setTimeout(() => {
-      const sid = process.env.FIRST_TREE_TEST_PROVIDER_SESSION_ID ?? "ses_new";
       process.stdout.write(JSON.stringify({type:"step_start",sessionID:sid,part:{sessionID:sid}}) + "\\n");
       process.stdout.write(JSON.stringify({type:"text",sessionID:sid,part:{text:input.trim()}}) + "\\n");
       process.stdout.write(JSON.stringify({type:"step_finish",sessionID:sid,part:{reason:"stop",tokens:{input:3,output:2}}}) + "\\n");
@@ -188,6 +186,7 @@ function createSyntheticSupervisor(
   specs: ProviderProcessSpec[],
   options: { version?: string; turnDelayMs?: number; capturedInputs?: string[] } = {},
 ): ProviderProcessSupervisor {
+  const v2 = (options.version ?? "1.18.7").startsWith("2.");
   return {
     spawn(spec) {
       specs.push(spec);
@@ -202,9 +201,11 @@ function createSyntheticSupervisor(
           FIRST_TREE_TEST_PROVIDER_VERSION: `${options.version ?? "1.18.7"}\n`,
           FIRST_TREE_TEST_PROVIDER_SESSION_ID: resumed,
           FIRST_TREE_TEST_PROVIDER_DELAY_MS: String(options.turnDelayMs ?? 0),
+          FIRST_TREE_TEST_PROVIDER_V2: v2 ? "1" : "0",
         },
         detached: false,
       });
+      // Both V1 and V2 turns stream the prompt on stdin; capture it for assertions.
       if (!isDb && !isVersion && child.stdin && options.capturedInputs) {
         const stdin = child.stdin;
         const write = stdin.write.bind(stdin);
@@ -1716,7 +1717,84 @@ describe("OpenCode V1 handler", () => {
       runtimeProvider: "opencode",
       agentConfigCache: cache(runtimeConfig()),
       opencodeBinaryResolver: () => ({ ok: true, binary: "/host/opencode" }),
-      providerProcessSupervisor: createSyntheticSupervisor(specs, { version: "2.0.0" }),
+      providerProcessSupervisor: createSyntheticSupervisor(specs, { version: "3.0.0" }),
+    });
+
+    const token = deliveryToken();
+    await handler.start(message("m1", "never submitted"), context([], []), token);
+    expect(token.complete).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: "m1" })],
+      expect.objectContaining({ status: "error", completion: "consumed" }),
+    );
+    expect(specs.map((spec) => spec.args)).toEqual([["--version"]]);
+    await handler.shutdown();
+  });
+
+  it("accepts OpenCode 2.x and skips the V1 db gate, streaming the prompt on stdin", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "ft-opencode-v2-ok-"));
+    roots.push(root);
+    const specs: ProviderProcessSpec[] = [];
+    const inputs: string[] = [];
+    const handler = createOpenCodeHandler({
+      workspaceRoot: root,
+      agentName: "opencode-test-agent",
+      runtimeProvider: "opencode",
+      agentConfigCache: cache(runtimeConfig()),
+      opencodeBinaryResolver: () => ({ ok: true, binary: "/host/opencode" }),
+      providerProcessSupervisor: createSyntheticSupervisor(specs, { version: "2.0.26", capturedInputs: inputs }),
+    });
+
+    await expect(handler.start(message("m1", "v2 prompt"), context([], []), deliveryToken())).resolves.toMatchObject({
+      sessionId: "ses_new",
+    });
+    // V2 has no `db` command, so only `--version` and `run` are launched.
+    expect(specs.map((spec) => spec.args[0])).toEqual(["--version", "run"]);
+    const runArgs = specs.find((spec) => spec.args[0] === "run")?.args ?? [];
+    expect(runArgs).toContain("--standalone");
+    expect(runArgs).not.toContain("--dir");
+    expect(runArgs).not.toContain("--log-level");
+    // V2 streams the prompt on stdin (not argv) to avoid the OS argv size limit.
+    const messageArg = runArgs.find((arg) => arg === "v2 prompt");
+    expect(messageArg).toBeUndefined();
+    expect(inputs.join("")).toContain("v2 prompt");
+    await handler.shutdown();
+  });
+
+  it("keeps a large V2 prompt off argv and on stdin (no E2BIG)", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "ft-opencode-v2-large-"));
+    roots.push(root);
+    const specs: ProviderProcessSpec[] = [];
+    const inputs: string[] = [];
+    const big = "x".repeat(2 * 1024 * 1024); // 2 MiB, exceeds typical ARG_MAX on macOS.
+    const handler = createOpenCodeHandler({
+      workspaceRoot: root,
+      agentName: "opencode-test-agent",
+      runtimeProvider: "opencode",
+      agentConfigCache: cache(runtimeConfig()),
+      opencodeBinaryResolver: () => ({ ok: true, binary: "/host/opencode" }),
+      providerProcessSupervisor: createSyntheticSupervisor(specs, { version: "2.0.26", capturedInputs: inputs }),
+    });
+
+    await expect(handler.start(message("m1", big), context([], []), deliveryToken())).resolves.toMatchObject({
+      sessionId: "ses_new",
+    });
+    const runArgs = specs.find((spec) => spec.args[0] === "run")?.args ?? [];
+    expect(runArgs.join("").length).toBeLessThan(64 * 1024);
+    expect(inputs.join("")).toContain(big);
+    await handler.shutdown();
+  });
+
+  it("fails closed on OpenCode 3.x before any turn", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "ft-opencode-v3-"));
+    roots.push(root);
+    const specs: ProviderProcessSpec[] = [];
+    const handler = createOpenCodeHandler({
+      workspaceRoot: root,
+      agentName: "opencode-test-agent",
+      runtimeProvider: "opencode",
+      agentConfigCache: cache(runtimeConfig()),
+      opencodeBinaryResolver: () => ({ ok: true, binary: "/host/opencode" }),
+      providerProcessSupervisor: createSyntheticSupervisor(specs, { version: "3.0.0" }),
     });
 
     const token = deliveryToken();

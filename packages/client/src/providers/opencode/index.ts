@@ -50,6 +50,7 @@ import { formatAuthHint, isOpenCodeAuthError } from "../handlers/auth-error-hint
 import { consumedErrorOutcome } from "../handlers/turn-settlement.js";
 import { PROVIDER_SKILL_ROOTS } from "../skill-roots.js";
 import {
+  isOpenCodeV2,
   isSupportedOpenCodeVersion,
   OPENCODE_SUPPORTED_VERSION_RANGE,
   parseOpenCodeVersionOutput,
@@ -153,6 +154,7 @@ export function buildOpenCodeTurnArgs(input: {
   model: string;
   resumeSessionId: string | null;
   managedAgentName: string;
+  v2?: boolean;
 }): string[] {
   const args = [
     "run",
@@ -163,12 +165,16 @@ export function buildOpenCodeTurnArgs(input: {
     input.managedAgentName,
     "--title",
     "First Tree managed turn",
-    "--dir",
-    input.cwd,
-    "--print-logs",
-    "--log-level",
-    "ERROR",
   ];
+  if (input.v2) {
+    // OpenCode 2.x runs against a background service and rejects the V1 `--dir`
+    // / `--log-level` flags. The prompt is streamed on stdin (V2 merges piped
+    // stdin with any positional message), which avoids the OS argv size limit
+    // that a positional prompt would hit on large Chat Context payloads.
+    args.push("--standalone");
+  } else {
+    args.push("--dir", input.cwd, "--print-logs", "--log-level", "ERROR");
+  }
   if (input.model) args.push("--model", input.model);
   if (input.resumeSessionId) args.push("--session", input.resumeSessionId);
   return args;
@@ -337,6 +343,8 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
   let currentAbort: AbortController | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let versionReady = false;
+  /** Parsed major-line of the resolved OpenCode CLI; drives the V1/V2 contract split. */
+  let detectedVersion: string | null = null;
   let generation = 0;
   let drainScheduled = false;
   let drainInProgress = false;
@@ -686,6 +694,10 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
     abortSignal: AbortSignal;
     turnGeneration: number;
   }): Promise<void> {
+    // OpenCode 2.x removed the `db` command and replaced it with a background
+    // service; readiness is owned by `run --standalone`, so the V1 DB gate must
+    // be skipped for V2 to avoid a guaranteed failure before the first turn.
+    if (isOpenCodeV2(detectedVersion)) return;
     const dataHome = input.env.XDG_DATA_HOME ?? input.env.APPDATA ?? input.env.HOME ?? "";
     const key = `${input.activeBinary}\0${dataHome}`;
     let gate = dbGatePromises.get(key);
@@ -748,6 +760,7 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
           `observed ${version ?? "no parseable version"}. ${detail}`,
       );
     }
+    detectedVersion = version;
     versionReady = true;
   }
 
@@ -981,6 +994,7 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
           }),
           { fileStore: activePrivateConfigLease },
         );
+        const isV2 = isOpenCodeV2(detectedVersion);
         try {
           outcome = await runProcess({
             command: activeBinary,
@@ -989,9 +1003,15 @@ export const createOpenCodeHandler: HandlerFactory = (config) => {
               model: payload.model,
               resumeSessionId: expectedSessionId,
               managedAgentName: activeManagedAgentName,
+              v2: isV2,
             }),
+            // Both V1 and V2 stream the prompt on stdin: V1 reads it directly,
+            // and V2 (run.ts) merges piped stdin with any positional message.
+            // This keeps large Chat Context payloads off argv and avoids E2BIG.
             prompt: `${providerPrompt}\n`,
-            env: configProjection.env,
+            // V2 selects its working directory from PWD / cwd; set it explicitly to
+            // preserve the V1 `--dir` semantics under the background-service model.
+            env: isV2 ? { ...configProjection.env, PWD: workspaceCwd } : configProjection.env,
             workspaceCwd,
             state,
             sessionCtx,

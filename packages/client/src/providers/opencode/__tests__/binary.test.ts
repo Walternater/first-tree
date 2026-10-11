@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   findOpenCodeExecutableOnPath,
   formatOpenCodeBinaryMissingMessage,
+  isOpenCodeV2,
   isSupportedOpenCodeVersion,
   parseOpenCodeVersionOutput,
   resolveOpenCodeRuntimeBinary,
@@ -114,29 +115,47 @@ describe("OpenCode binary resolution", () => {
   });
 
   it("surfaces external install and provider-owned auth instructions", () => {
-    expect(formatOpenCodeBinaryMissingMessage("not found")).toContain("npm install -g opencode-ai@^1.18.7");
+    expect(formatOpenCodeBinaryMissingMessage("not found")).toContain("npm install -g @opencode/cli@^2");
     expect(formatOpenCodeBinaryMissingMessage("not found")).toContain("opencode auth login");
   });
 
   it("parses a stable semver without accepting prerelease or partial versions", () => {
     expect(parseOpenCodeVersionOutput("opencode 1.18.7")).toBe("1.18.7");
+    expect(parseOpenCodeVersionOutput("opencode v2.0.26")).toBe("2.0.26");
     expect(parseOpenCodeVersionOutput("opencode 1.18.9-beta.1")).toBeNull();
+    expect(parseOpenCodeVersionOutput("opencode v1.18.9-beta.1")).toBeNull();
     expect(parseOpenCodeVersionOutput("opencode 01.18.7")).toBeNull();
     expect(parseOpenCodeVersionOutput("opencode 1.18.7_suffix")).toBeNull();
     expect(parseOpenCodeVersionOutput("opencode 1.18")).toBeNull();
     expect(parseOpenCodeVersionOutput("not-a-version")).toBeNull();
     expect(parseOpenCodeVersionOutput(`${"0".repeat(100_000)}.x opencode 1.18.7`)).toBe("1.18.7");
+    expect(parseOpenCodeVersionOutput(`${"0".repeat(100_000)}.x opencode v2.0.26`)).toBe("2.0.26");
   });
 
-  it("accepts the supported major-one range and fails closed outside it", () => {
+  it("accepts the supported 1.x and 2.x range and fails closed outside it", () => {
     expect(isSupportedOpenCodeVersion("1.18.7")).toBe(true);
     expect(isSupportedOpenCodeVersion("1.18.9")).toBe(true);
     expect(isSupportedOpenCodeVersion("1.19.0")).toBe(true);
+    expect(isSupportedOpenCodeVersion("2.0.0")).toBe(true);
+    expect(isSupportedOpenCodeVersion("2.0.26")).toBe(true);
+    expect(isSupportedOpenCodeVersion("2.99.99")).toBe(true);
     expect(isSupportedOpenCodeVersion("1.18.6")).toBe(false);
-    expect(isSupportedOpenCodeVersion("2.0.0")).toBe(false);
+    expect(isSupportedOpenCodeVersion("3.0.0")).toBe(false);
     expect(isSupportedOpenCodeVersion("1.18.9-beta.1")).toBe(false);
     expect(isSupportedOpenCodeVersion("01.18.7")).toBe(false);
     expect(isSupportedOpenCodeVersion("1.18.7_suffix")).toBe(false);
     expect(isSupportedOpenCodeVersion(null)).toBe(false);
+  });
+
+  it("classifies the V1/V2 runtime generation from the parsed version", () => {
+    expect(isOpenCodeV2("1.18.7")).toBe(false);
+    expect(isOpenCodeV2("1.19.0")).toBe(false);
+    expect(isOpenCodeV2("2.0.0")).toBe(true);
+    expect(isOpenCodeV2("2.0.26")).toBe(true);
+    expect(isOpenCodeV2("2.99.99")).toBe(true);
+    expect(isOpenCodeV2("3.0.0")).toBe(true);
+    expect(isOpenCodeV2("2.0.0-beta.1")).toBe(false);
+    expect(isOpenCodeV2("v2.0.26")).toBe(false);
+    expect(isOpenCodeV2(null)).toBe(false);
   });
 });
