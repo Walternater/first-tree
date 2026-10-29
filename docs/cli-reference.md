@@ -2020,6 +2020,20 @@ or normal-to-archive links: mechanical syntax can be corrected directly, while
 ownership assignments and promotion of durable archive content require human
 or source-backed decisions. Run `first-tree tree verify --help` for options.
 
+`first-tree tree verify --evidence` additionally validates the optional,
+non-canonical evidence sidecar under `raw-context/evidence/`. Each `.jsonl`
+line is one claim record with `id`, `node`, `claim`, `sources`, and optional
+`kind`, `validAt`, `confidence`, `supersedes`, `contradicts`, and `dependsOn`.
+Verified records need at least one source with `path`, `line`, and a verbatim
+`quote`; duplicate ids, unresolved contradictions, stale `validAt` values, and
+references to missing nodes fail the check. Add `--source-root PATH` to resolve
+source files locally and verify file existence, line range, and quote text. Repos
+mapped in `raw-context/evidence/sources.json` use that mapping; unmapped repos
+fall back to `<PATH>/<repo>/<file>` and then `<PATH>/<file>`, so a single
+checkout works for every record. `--max-evidence-age-days N` changes the default
+180-day freshness window. Without `--evidence`, verification behavior is
+unchanged for trees that do not use the sidecar.
+
 `first-tree tree local resolve --ensure --intent read|write` is the narrow
 managed-Agent guard for Local Context. It accepts no caller path and resolves
 only `<agent-workspace>/local-context/` from the active runtime Agent identity.

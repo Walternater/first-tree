@@ -9,6 +9,7 @@ import { readSourceBindingContract, SOURCE_INTEGRATION_FILES } from "./binding-c
 import { TREE_PROGRESS_FILE } from "./binding-state.js";
 import type { ContextContentClassCounts } from "./content-class.js";
 import { inspectRepoInfraMarkdownFile } from "./content-class.js";
+import { collectEvidenceFindings, DEFAULT_MAX_EVIDENCE_AGE_DAYS } from "./evidence.js";
 import { resolveRepoRoot } from "./shared.js";
 import { readTreeIdentityContract } from "./tree-identity.js";
 import { collectMemberValidationFindings, formatLegacyMemberError } from "./validate-members.js";
@@ -22,13 +23,16 @@ import {
 
 const UNCHECKED_RE = /^- \[ \] (.+)$/gmu;
 
-export const VERIFY_USAGE = `usage: ${channelConfig.binName} tree verify [--tree-path PATH]
+export const VERIFY_USAGE = `usage: ${channelConfig.binName} tree verify [--tree-path PATH] [--evidence]
 
 Run validation checks against a Context Tree repo.
 
 Options:
-  --tree-path PATH   Verify a tree repo from another working directory
-  --help             Show this help message`;
+  --tree-path PATH               Verify a tree repo from another working directory
+  --evidence                     Also validate raw-context/evidence claim records
+  --source-root PATH             Resolve evidence source files from this checkout root
+  --max-evidence-age-days N      Fail evidence older than N days (default ${DEFAULT_MAX_EVIDENCE_AGE_DAYS})
+  --help                         Show this help message`;
 
 type VerifyCheck = {
   errors?: string[];
@@ -40,6 +44,7 @@ export type VerifySummary = {
     frameworkVersion: VerifyCheck;
     members: VerifyCheck;
     nodes: VerifyCheck;
+    evidence?: VerifyCheck;
     progress: VerifyCheck & { uncheckedItems: string[] };
     rootNodeFrontmatter: VerifyCheck;
     scope: VerifyCheck;
@@ -53,6 +58,38 @@ export type VerifySummary = {
 
 function configureVerifyCommand(command: Command): void {
   command.option("--tree-path <path>", "verify a tree repo from another working directory");
+  command.option("--evidence", "also validate raw-context/evidence claim records");
+  command.option("--source-root <path>", "resolve evidence source files from this checkout root");
+  command.option(
+    "--max-evidence-age-days <days>",
+    `fail evidence older than this many days (default ${DEFAULT_MAX_EVIDENCE_AGE_DAYS})`,
+  );
+}
+
+type VerifyOptions = {
+  evidence?: boolean;
+  maxEvidenceAgeDays?: number;
+  sourceRoot?: string;
+};
+
+function parseVerifyOptions(command: Command): VerifyOptions {
+  const options = command.opts() as {
+    evidence?: boolean;
+    maxEvidenceAgeDays?: string;
+    sourceRoot?: string;
+  };
+  const parsed: VerifyOptions = {
+    ...(options.evidence === true ? { evidence: true } : {}),
+    ...(options.sourceRoot === undefined ? {} : { sourceRoot: resolve(process.cwd(), options.sourceRoot) }),
+  };
+  if (options.maxEvidenceAgeDays !== undefined) {
+    const value = Number(options.maxEvidenceAgeDays);
+    if (!Number.isInteger(value) || value < 1) {
+      throw new Error(`--max-evidence-age-days must be a positive integer, got: ${options.maxEvidenceAgeDays}`);
+    }
+    parsed.maxEvidenceAgeDays = value;
+  }
+  return parsed;
 }
 
 function readTargetRoot(command: Command): string {
@@ -163,7 +200,7 @@ function verifyScopeFile(targetRoot: string): string[] {
   }
 }
 
-export function verifyTreeRoot(targetRoot: string): VerifySummary {
+export function verifyTreeRoot(targetRoot: string, options: VerifyOptions = {}): VerifySummary {
   const invalidManagedPath = SOURCE_INTEGRATION_FILES.some(
     (file) => inspectRepoInfraMarkdownFile(targetRoot, file).kind === "invalid",
   );
@@ -178,6 +215,13 @@ export function verifyTreeRoot(targetRoot: string): VerifySummary {
   const progressItems = readUncheckedProgressItems(targetRoot);
   const nodeResult = collectNodeValidationFindings(targetRoot);
   const memberResult = collectMemberValidationFindings(targetRoot);
+  const evidenceResult =
+    options.evidence === true
+      ? collectEvidenceFindings(targetRoot, {
+          ...(options.maxEvidenceAgeDays === undefined ? {} : { maxAgeDays: options.maxEvidenceAgeDays }),
+          ...(options.sourceRoot === undefined ? {} : { sourceRoot: options.sourceRoot }),
+        })
+      : undefined;
   const missingRootFinding: TreeValidationFinding[] = rootNodeExists(join(targetRoot, "NODE.md"))
     ? []
     : [
@@ -191,7 +235,11 @@ export function verifyTreeRoot(targetRoot: string): VerifySummary {
   const rootFindings = nodeFindings.filter(
     (finding) => finding.path === "NODE.md" && ROOT_METADATA_CODES.has(finding.code),
   );
-  const findings = deduplicateFindings([...nodeFindings, ...memberResult.findings]);
+  const findings = deduplicateFindings([
+    ...nodeFindings,
+    ...memberResult.findings,
+    ...(evidenceResult?.findings ?? []),
+  ]);
   const nodeErrors = nodeFindings.map(formatLegacyNodeError);
   const memberErrors = memberResult.findings.map(formatLegacyMemberError);
   const rootNodeErrors = rootFindings.map(formatRootNodeError);
@@ -215,6 +263,16 @@ export function verifyTreeRoot(targetRoot: string): VerifySummary {
         ok: nodeErrors.length === 0,
         ...(nodeErrors.length === 0 ? {} : { errors: nodeErrors }),
       },
+      ...(evidenceResult === undefined
+        ? {}
+        : {
+            evidence: {
+              ok: evidenceResult.findings.length === 0,
+              ...(evidenceResult.findings.length === 0
+                ? {}
+                : { errors: evidenceResult.findings.map((finding) => formatValidationFinding(finding)) }),
+            },
+          }),
       progress: {
         ok: progressItems.length === 0,
         ...(progressItems.length === 0
@@ -255,6 +313,9 @@ function printVerifySummary(summary: VerifySummary): void {
     ["root SCOPE.md", summary.checks.scope],
     ["node validation", summary.checks.nodes],
     ["member validation", summary.checks.members],
+    ...(summary.checks.evidence === undefined
+      ? []
+      : [["evidence validation", summary.checks.evidence] as [string, VerifyCheck]]),
     ["progress checklist", summary.checks.progress],
   ];
 
@@ -279,7 +340,7 @@ function printVerifySummary(summary: VerifySummary): void {
 
 function runVerifyCommand(context: CommandContext): void {
   try {
-    const summary = verifyTreeRoot(readTargetRoot(context.command));
+    const summary = verifyTreeRoot(readTargetRoot(context.command), parseVerifyOptions(context.command));
 
     if (context.options.json) {
       console.log(JSON.stringify(summary, null, 2));
